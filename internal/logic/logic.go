@@ -63,6 +63,17 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 	return nil
 }
 
+func (c *Controller) DeleteMemory(id int64) error {
+	return c.db.DeleteMemory(id)
+}
+
+func (c *Controller) ListMemories(limit int) ([]db.Memory, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	return c.db.List(limit)
+}
+
 func (c *Controller) SearchMemories(query string, limit int, daysBack int, startStr, endStr string) ([]db.Memory, error) {
 	// 1. Vettorizzazione query
 	vector, err := c.embed.GetEmbedding(query)

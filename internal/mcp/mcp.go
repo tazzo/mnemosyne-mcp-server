@@ -148,6 +148,27 @@ func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 					"required": []string{"query"},
 				},
 			},
+			{
+				"name":        "list_memories",
+				"description": "List the most recent memories with their IDs.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"limit": map[string]string{"type": "integer", "description": "Number of memories to list (default 10)"},
+					},
+				},
+			},
+			{
+				"name":        "delete_memory",
+				"description": "Delete a specific memory by its ID.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]string{"type": "integer", "description": "The numeric ID of the memory to delete"},
+					},
+					"required": []string{"id"},
+				},
+			},
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"tools": tools}}
 	
@@ -192,10 +213,36 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 		
 		var resultText string
 		for _, m := range memories {
-			resultText += fmt.Sprintf("\n--- MEMORY [%s] ---\n%s\n", m.Timestamp.Format("2006-01-02"), m.Content)
+			resultText += fmt.Sprintf("\n--- MEMORY [%d] [%s] ---\n%s\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content)
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": resultText}},
+		}}
+
+	case "list_memories":
+		limitFloat, _ := params.Arguments["limit"].(float64)
+		limit := int(limitFloat)
+		memories, err := s.controller.ListMemories(limit)
+		if err != nil {
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
+		}
+		var resultText string
+		for _, m := range memories {
+			resultText += fmt.Sprintf("ID: %d | Date: %s | Preview: %s...\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content[:100])
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": resultText}},
+		}}
+
+	case "delete_memory":
+		idFloat, _ := params.Arguments["id"].(float64)
+		id := int64(idFloat)
+		err := s.controller.DeleteMemory(id)
+		if err != nil {
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("✅ Memory %d deleted.", id)}},
 		}}
 	}
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Tool not found"}}

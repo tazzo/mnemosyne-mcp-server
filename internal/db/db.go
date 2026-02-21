@@ -48,9 +48,32 @@ func (db *DB) InsertMemory(ts time.Time, content string, vector []float32) error
 	return err
 }
 
+func (db *DB) DeleteMemory(id int64) error {
+	_, err := db.pool.Exec("DELETE FROM memories WHERE id = $1", id)
+	return err
+}
+
+func (db *DB) List(limit int) ([]Memory, error) {
+	rows, err := db.pool.Query("SELECT id, timestamp, content FROM memories ORDER BY id DESC LIMIT $1", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		if err := rows.Scan(&m.ID, &m.Timestamp, &m.Content); err != nil {
+			return nil, err
+		}
+		memories = append(memories, m)
+	}
+	return memories, nil
+}
+
 func (db *DB) Search(vector []float32, limit int, start, end *time.Time) ([]Memory, error) {
 	query := `
-		SELECT timestamp, content 
+		SELECT id, timestamp, content 
 		FROM memories 
 		WHERE 1=1
 	`
@@ -79,7 +102,7 @@ func (db *DB) Search(vector []float32, limit int, start, end *time.Time) ([]Memo
 	var memories []Memory
 	for rows.Next() {
 		var m Memory
-		if err := rows.Scan(&m.Timestamp, &m.Content); err != nil {
+		if err := rows.Scan(&m.ID, &m.Timestamp, &m.Content); err != nil {
 			return nil, err
 		}
 		memories = append(memories, m)
