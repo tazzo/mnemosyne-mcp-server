@@ -168,9 +168,50 @@ func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 					"required": []string{"id"},
 				},
 			},
+			{
+				"name":        "update_blueprint",
+				"description": "Update the extraction protocol rules (blueprint) for future memories.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"content": map[string]string{"type": "string", "description": "The new extraction blueprint in Markdown"},
+					},
+					"required": []string{"content"},
+				},
+			},
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"tools": tools}}
 	
+	case "resources/list":
+		resources := []map[string]interface{}{
+			{
+				"uri":         "resource://mnemosyne/blueprint",
+				"name":        "Extraction Blueprint",
+				"description": "Current TAZLAB protocol for memory extraction",
+				"mimeType":    "text/markdown",
+			},
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"resources": resources}}
+
+	case "resources/read":
+		var params struct {
+			URI string `json:"uri"`
+		}
+		json.Unmarshal(req.Params, &params)
+		if params.URI == "resource://mnemosyne/blueprint" {
+			blueprint, _ := s.controller.GetBlueprint()
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+				"contents": []map[string]interface{}{
+					{
+						"uri":      params.URI,
+						"mimeType": "text/markdown",
+						"text":     blueprint,
+					},
+				},
+			}}
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32602, "message": "Resource not found"}}
+
 	case "tools/call":
 		return s.handleToolCall(req)
 	}
@@ -247,6 +288,19 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("✅ Memory %s deleted.", id)}},
+		}}
+
+	case "update_blueprint":
+		content, _ := params.Arguments["content"].(string)
+		if content == "" {
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32602, "message": "Content is required"}}
+		}
+		err := s.controller.UpdateBlueprint(content)
+		if err != nil {
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": "✅ Extraction blueprint updated in database."}},
 		}}
 	}
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Tool not found"}}

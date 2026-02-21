@@ -33,6 +33,18 @@ func New(host, port, user, password, dbname string) (*DB, error) {
 		return nil, err
 	}
 
+	// Inizializzazione Tabelle di Configurazione
+	_, err = pool.Exec(`
+		CREATE TABLE IF NOT EXISTS mnemosyne_config (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create config table: %w", err)
+	}
+
 	return &DB{pool: pool}, nil
 }
 
@@ -51,6 +63,25 @@ func (db *DB) InsertMemory(ts time.Time, content string, vector []float32) error
 func (db *DB) DeleteMemory(id string) error {
 	_, err := db.pool.Exec("DELETE FROM memories WHERE id = $1", id)
 	return err
+}
+
+func (db *DB) SetConfig(key, value string) error {
+	_, err := db.pool.Exec(`
+		INSERT INTO mnemosyne_config (key, value) 
+		VALUES ($1, $2) 
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		key, value,
+	)
+	return err
+}
+
+func (db *DB) GetConfig(key string) (string, error) {
+	var value string
+	err := db.pool.QueryRow("SELECT value FROM mnemosyne_config WHERE key = $1", key).Scan(&value)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
 func (db *DB) List(limit int) ([]Memory, error) {

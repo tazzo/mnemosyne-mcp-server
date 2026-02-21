@@ -74,6 +74,28 @@ func (c *Controller) ListMemories(limit int) ([]db.Memory, error) {
 	return c.db.List(limit)
 }
 
+const DefaultBlueprint = `# TAZLAB KNOWLEDGE EXTRACTION PROTOCOL
+## ROLE
+Act as Senior Platform Architect. Extract technical chronicles in Markdown.
+[[[CHRONICLE_START]]]
+TS: <timestamp>
+TITLE: <context>
+TAGS: <tags>
+BODY: <details>
+[[[CHRONICLE_END]]]`
+
+func (c *Controller) GetBlueprint() (string, error) {
+	val, err := c.db.GetConfig("extraction_blueprint")
+	if err != nil {
+		return DefaultBlueprint, nil
+	}
+	return val, nil
+}
+
+func (c *Controller) UpdateBlueprint(content string) error {
+	return c.db.SetConfig("extraction_blueprint", content)
+}
+
 func (c *Controller) SearchMemories(query string, limit int, daysBack int, startStr, endStr string) ([]db.Memory, error) {
 	// 1. Vettorizzazione query
 	vector, err := c.embed.GetEmbedding(query)
