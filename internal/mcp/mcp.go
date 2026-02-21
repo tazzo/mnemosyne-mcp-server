@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	"tazlab/mnemosyne-mcp-server/internal/logic"
@@ -49,6 +50,7 @@ func NewServer(ctrl *logic.Controller) *Server {
 
 func (s *Server) worker() {
 	for job := range s.jobChan {
+		fmt.Fprintf(os.Stderr, "👷 Worker: Processing job for session %s (Method: %s)\n", job.SessionID, job.Request.Method)
 		// Processa la richiesta (una alla volta)
 		resp := s.processRequest(job.Request)
 		
@@ -58,12 +60,16 @@ func (s *Server) worker() {
 		s.mu.RUnlock()
 
 		if ok {
+			fmt.Fprintf(os.Stderr, "📤 Worker: Sending response to session %s\n", job.SessionID)
 			respJSON, _ := json.Marshal(resp)
 			select {
 			case clientChan <- string(respJSON):
-			case <-time.After(5 * time.Second):
-				fmt.Printf("⚠️ Timeout sending response to session %s\n", job.SessionID)
+				fmt.Fprintf(os.Stderr, "✅ Worker: Response delivered to %s\n", job.SessionID)
+			case <-time.After(10 * time.Second):
+				fmt.Fprintf(os.Stderr, "⚠️ Worker: Timeout sending response to session %s\n", job.SessionID)
 			}
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Worker: Client session %s not found for response\n", job.SessionID)
 		}
 	}
 }
@@ -80,12 +86,15 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		sessionID = "default"
 	}
 
+	fmt.Fprintf(os.Stderr, "🔌 New SSE connection: sessionId=%s\n", sessionID)
+
 	messageChan := make(chan string, 10)
 	s.mu.Lock()
 	s.clients[sessionID] = messageChan
 	s.mu.Unlock()
 
 	defer func() {
+		fmt.Fprintf(os.Stderr, "🔌 SSE connection closed: sessionId=%s\n", sessionID)
 		s.mu.Lock()
 		delete(s.clients, sessionID)
 		s.mu.Unlock()
@@ -116,9 +125,12 @@ func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
 
 	var req JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Invalid JSON-RPC from %s: %v\n", sessionID, err)
 		http.Error(w, "Invalid JSON-RPC", http.StatusBadRequest)
 		return
 	}
+
+	fmt.Fprintf(os.Stderr, "📥 Message received: sessionId=%s, method=%s\n", sessionID, req.Method)
 
 	// Mettiamo la richiesta in coda e rispondiamo subito 202
 	s.jobChan <- Job{
