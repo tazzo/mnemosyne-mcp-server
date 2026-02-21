@@ -102,7 +102,12 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Invia l'URL per i messaggi (endpoint richiesto dal protocollo MCP SSE)
-	fmt.Fprintf(w, "event: endpoint\ndata: /message?sessionId=%s\n\n", sessionID)
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	// Usiamo r.Host per costruire l'URL assoluto
+	fmt.Fprintf(w, "event: endpoint\ndata: %s://%s/message?sessionId=%s\n\n", scheme, r.Host, sessionID)
 	w.(http.Flusher).Flush()
 
 	for msg := range messageChan {
