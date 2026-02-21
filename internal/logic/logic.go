@@ -18,6 +18,9 @@ type Controller struct {
 	// Cache per deduplicazione (Session-aware)
 	cache     map[string]time.Time
 	cacheMu   sync.RWMutex
+
+	// Mutex per serializzare le ingestioni (vettorizzazione lenta)
+	ingestMu  sync.Mutex
 }
 
 func New(database *db.DB, embedClient *embedding.Client) *Controller {
@@ -29,6 +32,10 @@ func New(database *db.DB, embedClient *embedding.Client) *Controller {
 }
 
 func (c *Controller) IngestMemory(content string, ts time.Time) error {
+	// Serializziamo l'ingestione per evitare di sovraccaricare le API di embedding
+	c.ingestMu.Lock()
+	defer c.ingestMu.Unlock()
+
 	// 1. Prepara il blocco unico di conoscenza
 	// Content include già Titolo e Tag dal blueprint V9
 	composite := fmt.Sprintf("DATE: %s\n%s", ts.Format(time.RFC3339), content)

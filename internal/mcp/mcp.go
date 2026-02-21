@@ -24,16 +24,47 @@ type JSONRPCResponse struct {
 	Error   interface{} `json:"error,omitempty"`
 }
 
+type Job struct {
+	SessionID string
+	Request   JSONRPCRequest
+}
+
 type Server struct {
 	controller *logic.Controller
 	clients    map[string]chan string
+	jobChan    chan Job
 	mu         sync.RWMutex
 }
 
 func NewServer(ctrl *logic.Controller) *Server {
-	return &Server{
+	s := &Server{
 		controller: ctrl,
 		clients:    make(map[string]chan string),
+		jobChan:    make(chan Job, 100),
+	}
+	// Avvio del background worker
+	go s.worker()
+	return s
+}
+
+func (s *Server) worker() {
+	for job := range s.jobChan {
+		// Processa la richiesta (una alla volta)
+		resp := s.processRequest(job.Request)
+		
+		// Invia la risposta al client specifico tramite il suo canale SSE
+		s.mu.RLock()
+		clientChan, ok := s.clients[job.SessionID]
+		s.mu.RUnlock()
+
+		if ok {
+			respJSON, _ := json.Marshal(resp)
+			select {
+			case clientChan <- string(respJSON):
+			case <-time.After(5 * time.Second):
+				fmt.Printf("⚠️ Timeout sending response to session %s\n", job.SessionID)
+			}
+		}
 	}
 }
 
@@ -89,17 +120,10 @@ func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Processa la richiesta e ottiene la risposta
-	resp := s.processRequest(req)
-	
-	// Invia la risposta al client tramite il canale SSE
-	s.mu.RLock()
-	clientChan, ok := s.clients[sessionID]
-	s.mu.RUnlock()
-
-	if ok {
-		respJSON, _ := json.Marshal(resp)
-		clientChan <- string(respJSON)
+	// Mettiamo la richiesta in coda e rispondiamo subito 202
+	s.jobChan <- Job{
+		SessionID: sessionID,
+		Request:   req,
 	}
 
 	w.WriteHeader(http.StatusAccepted)
