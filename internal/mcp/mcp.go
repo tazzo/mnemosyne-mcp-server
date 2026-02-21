@@ -108,13 +108,9 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Invia l'URL per i messaggi (endpoint richiesto dal protocollo MCP SSE)
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	// Usiamo r.Host per costruire l'URL assoluto
-	endpointURL := fmt.Sprintf("%s://%s/message?sessionId=%s", scheme, r.Host, sessionID)
-	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending endpoint event: %s\n", endpointURL)
+	// Torniamo all'URL relativo che è più standard per i proxy
+	endpointURL := fmt.Sprintf("/message?sessionId=%s", sessionID)
+	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending RELATIVE endpoint event: %s\n", endpointURL)
 	
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	w.(http.Flusher).Flush()
@@ -304,25 +300,33 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 
 	case "retrieve_memories":
 		query, _ := params.Arguments["query"].(string)
-		limit, _ := params.Arguments["limit"].(float64)
-		daysBack, _ := params.Arguments["days_back"].(float64)
+		limit := 5
+		if l, ok := params.Arguments["limit"].(float64); ok {
+			limit = int(l)
+		}
+		daysBack := 0
+		if d, ok := params.Arguments["days_back"].(float64); ok {
+			daysBack = int(d)
+		}
 
-		memories, err := s.controller.SearchMemories(query, int(limit), int(daysBack), "", "")
+		memories, err := s.controller.SearchMemories(query, limit, daysBack, "", "")
 		if err != nil {
 			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
 		}
 		
 		var resultText string
 		for _, m := range memories {
-			resultText += fmt.Sprintf("\n--- MEMORY [%d] [%s] ---\n%s\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content)
+			resultText += fmt.Sprintf("\n--- MEMORY [%s] [%s] ---\n%s\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content)
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": resultText}},
 		}}
 
 	case "list_memories":
-		limitFloat, _ := params.Arguments["limit"].(float64)
-		limit := int(limitFloat)
+		limit := 10
+		if l, ok := params.Arguments["limit"].(float64); ok {
+			limit = int(l)
+		}
 		memories, err := s.controller.ListMemories(limit)
 		if err != nil {
 			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
