@@ -227,21 +227,26 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 		}
 		var resultText string
 		for _, m := range memories {
-			resultText += fmt.Sprintf("ID: %d | Date: %s | Preview: %s...\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content[:100])
+			resultText += fmt.Sprintf("ID: %s | Date: %s | Preview: %s...\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content[:100])
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": resultText}},
 		}}
 
 	case "delete_memory":
-		idFloat, _ := params.Arguments["id"].(float64)
-		id := int64(idFloat)
+		id, _ := params.Arguments["id"].(string)
+		if id == "" {
+			// Fallback if client sends numeric ID by mistake (though unlikely with UUIDs)
+			if idFloat, ok := params.Arguments["id"].(float64); ok {
+				id = fmt.Sprintf("%.0f", idFloat)
+			}
+		}
 		err := s.controller.DeleteMemory(id)
 		if err != nil {
 			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("✅ Memory %d deleted.", id)}},
+			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("✅ Memory %s deleted.", id)}},
 		}}
 	}
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Tool not found"}}

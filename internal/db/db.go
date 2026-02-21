@@ -10,7 +10,7 @@ import (
 )
 
 type Memory struct {
-	ID        int64
+	ID        string
 	Timestamp time.Time
 	Content   string
 	Embedding []float32
@@ -48,13 +48,13 @@ func (db *DB) InsertMemory(ts time.Time, content string, vector []float32) error
 	return err
 }
 
-func (db *DB) DeleteMemory(id int64) error {
+func (db *DB) DeleteMemory(id string) error {
 	_, err := db.pool.Exec("DELETE FROM memories WHERE id = $1", id)
 	return err
 }
 
 func (db *DB) List(limit int) ([]Memory, error) {
-	rows, err := db.pool.Query("SELECT id, timestamp, content FROM memories ORDER BY id DESC LIMIT $1", limit)
+	rows, err := db.pool.Query("SELECT id, timestamp, content FROM memories ORDER BY timestamp DESC LIMIT $1", limit)
 	if err != nil {
 		return nil, err
 	}

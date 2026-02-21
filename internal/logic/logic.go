@@ -63,7 +63,7 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 	return nil
 }
 
-func (c *Controller) DeleteMemory(id int64) error {
+func (c *Controller) DeleteMemory(id string) error {
 	return c.db.DeleteMemory(id)
 }
 
