@@ -49,10 +49,16 @@ func NewServer(ctrl *logic.Controller) *Server {
 }
 
 func (s *Server) worker() {
+	fmt.Fprintf(os.Stderr, "🚀 Worker started and waiting for jobs...\n")
 	for job := range s.jobChan {
-		fmt.Fprintf(os.Stderr, "👷 Worker: Processing job for session %s (Method: %s)\n", job.SessionID, job.Request.Method)
+		fmt.Fprintf(os.Stderr, "👷 Worker: PICKED UP job from session %s (Method: %s, ID: %v)\n", job.SessionID, job.Request.Method, job.Request.ID)
+		
 		// Processa la richiesta (una alla volta)
+		start := time.Now()
 		resp := s.processRequest(job.Request)
+		duration := time.Since(start)
+		
+		fmt.Fprintf(os.Stderr, "🧠 Worker: logic.ProcessRequest finished in %v for session %s\n", duration, job.SessionID)
 		
 		// Invia la risposta al client specifico tramite il suo canale SSE
 		s.mu.RLock()
@@ -60,41 +66,41 @@ func (s *Server) worker() {
 		s.mu.RUnlock()
 
 		if ok {
-			fmt.Fprintf(os.Stderr, "📤 Worker: Sending response to session %s\n", job.SessionID)
+			fmt.Fprintf(os.Stderr, "📤 Worker: Attempting to send response to SSE channel for %s\n", job.SessionID)
 			respJSON, _ := json.Marshal(resp)
 			select {
 			case clientChan <- string(respJSON):
-				fmt.Fprintf(os.Stderr, "✅ Worker: Response delivered to %s\n", job.SessionID)
-			case <-time.After(10 * time.Second):
-				fmt.Fprintf(os.Stderr, "⚠️ Worker: Timeout sending response to session %s\n", job.SessionID)
+				fmt.Fprintf(os.Stderr, "✅ Worker: Response successfully delivered to SSE channel for %s\n", job.SessionID)
+			case <-time.After(15 * time.Second):
+				fmt.Fprintf(os.Stderr, "⚠️ Worker: TIMEOUT (15s) while sending response to session %s - channel full?\n", job.SessionID)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "❌ Worker: Client session %s not found for response\n", job.SessionID)
+			fmt.Fprintf(os.Stderr, "❌ Worker: ABORTED - Client session %s DISCONNECTED before response could be sent\n", job.SessionID)
 		}
 	}
 }
 
 // Handler per l'endpoint SSE (/sse)
 func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
 		sessionID = "default"
 	}
 
-	fmt.Fprintf(os.Stderr, "🔌 New SSE connection: sessionId=%s\n", sessionID)
+	fmt.Fprintf(os.Stderr, "🔌 [SSE] Connection request: sessionId=%s, remoteAddr=%s\n", sessionID, r.RemoteAddr)
 
-	messageChan := make(chan string, 10)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	messageChan := make(chan string, 100) // Buffer più grande per evitare blocchi
 	s.mu.Lock()
 	s.clients[sessionID] = messageChan
 	s.mu.Unlock()
 
 	defer func() {
-		fmt.Fprintf(os.Stderr, "🔌 SSE connection closed: sessionId=%s\n", sessionID)
+		fmt.Fprintf(os.Stderr, "🔌 [SSE] Connection CLOSED: sessionId=%s\n", sessionID)
 		s.mu.Lock()
 		delete(s.clients, sessionID)
 		s.mu.Unlock()
@@ -107,43 +113,57 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		scheme = "https"
 	}
 	// Usiamo r.Host per costruire l'URL assoluto
-	fmt.Fprintf(w, "event: endpoint\ndata: %s://%s/message?sessionId=%s\n\n", scheme, r.Host, sessionID)
+	endpointURL := fmt.Sprintf("%s://%s/message?sessionId=%s", scheme, r.Host, sessionID)
+	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending endpoint event: %s\n", endpointURL)
+	
+	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	w.(http.Flusher).Flush()
 
+	fmt.Fprintf(os.Stderr, "👂 [SSE] Entering event loop for session %s\n", sessionID)
 	for msg := range messageChan {
-		fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+		fmt.Fprintf(os.Stderr, "📤 [SSE] Writing message event to wire for %s\n", sessionID)
+		_, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ [SSE] Write error for session %s: %v\n", sessionID, err)
+			return
+		}
 		w.(http.Flusher).Flush()
 	}
 }
 
 // Handler per l'endpoint dei messaggi (/message)
 func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
 		sessionID = "default"
 	}
 
+	if r.Method != http.MethodPost {
+		fmt.Fprintf(os.Stderr, "🚫 [MSG] Rejected non-POST request from %s (Method: %s)\n", sessionID, r.Method)
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "📥 [MSG] Incoming request from %s (Size: %d bytes)\n", sessionID, r.ContentLength)
+
 	var req JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Invalid JSON-RPC from %s: %v\n", sessionID, err)
+		fmt.Fprintf(os.Stderr, "❌ [MSG] JSON Decode ERROR from %s: %v\n", sessionID, err)
 		http.Error(w, "Invalid JSON-RPC", http.StatusBadRequest)
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "📥 Message received: sessionId=%s, method=%s\n", sessionID, req.Method)
+	fmt.Fprintf(os.Stderr, "📥 [MSG] Request validated: sessionId=%s, method=%s, id=%v\n", sessionID, req.Method, req.ID)
 
-	// Mettiamo la richiesta in coda e rispondiamo subito 202
-	s.jobChan <- Job{
-		SessionID: sessionID,
-		Request:   req,
+	// Mettiamo la richiesta in coda
+	select {
+	case s.jobChan <- Job{SessionID: sessionID, Request: req}:
+		fmt.Fprintf(os.Stderr, "📥 [MSG] Job ENQUEUED successfully for session %s\n", sessionID)
+		w.WriteHeader(http.StatusAccepted)
+	default:
+		fmt.Fprintf(os.Stderr, "🚨 [MSG] Job Queue FULL! Dropping request from session %s\n", sessionID)
+		http.Error(w, "Server too busy", http.StatusServiceUnavailable)
 	}
-
-	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {

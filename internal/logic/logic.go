@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -36,6 +37,8 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 	c.ingestMu.Lock()
 	defer c.ingestMu.Unlock()
 
+	fmt.Fprintf(os.Stderr, "🧠 [LOGIC] IngestMemory started (Content length: %d)\n", len(content))
+
 	// 1. Prepara il blocco unico di conoscenza
 	// Content include già Titolo e Tag dal blueprint V9
 	composite := fmt.Sprintf("DATE: %s\n%s", ts.Format(time.RFC3339), content)
@@ -49,7 +52,7 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 		// Se visto negli ultimi 10 minuti, saltiamo (evita doppi salvataggi nella stessa sessione)
 		if time.Since(lastSeen) < 10*time.Minute {
 			c.cacheMu.Unlock()
-			fmt.Printf("⏩ Memory already saved recently (hash: %s), skipping.\n", hashStr[:8])
+			fmt.Fprintf(os.Stderr, "⏩ [LOGIC] Memory already saved recently (hash: %s), skipping.\n", hashStr[:8])
 			return nil
 		}
 	}
@@ -57,20 +60,29 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 	c.cacheMu.Unlock()
 
 	// 3. Vettorizzazione
+	fmt.Fprintf(os.Stderr, "📡 [LOGIC] Calling embedding API for hash %s...\n", hashStr[:8])
+	embedStart := time.Now()
 	vector, err := c.embed.GetEmbedding(composite)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ [LOGIC] Embedding FAILED: %v\n", err)
 		return fmt.Errorf("failed to get embedding: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "✅ [LOGIC] Embedding retrieved in %v\n", time.Since(embedStart))
 
 	// 4. Salvataggio nel DB
+	fmt.Fprintf(os.Stderr, "💾 [LOGIC] Saving to database...\n")
+	dbStart := time.Now()
 	if err := c.db.InsertMemory(ts, composite, vector); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ [LOGIC] DB Insert FAILED: %v\n", err)
 		return fmt.Errorf("failed to save to database: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "✅ [LOGIC] DB Insert SUCCESS in %v\n", time.Since(dbStart))
 
 	return nil
 }
 
 func (c *Controller) DeleteMemory(id string) error {
+	fmt.Fprintf(os.Stderr, "🗑️ [LOGIC] Deleting memory ID: %s\n", id)
 	return c.db.DeleteMemory(id)
 }
 
@@ -78,6 +90,7 @@ func (c *Controller) ListMemories(limit int) ([]db.Memory, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	fmt.Fprintf(os.Stderr, "📋 [LOGIC] Listing recent memories (limit: %d)\n", limit)
 	return c.db.List(limit)
 }
 
