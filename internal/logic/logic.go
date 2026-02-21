@@ -31,8 +31,7 @@ func New(database *db.DB, embedClient *embedding.Client) *Controller {
 func (c *Controller) IngestMemory(content string, ts time.Time) error {
 	// 1. Prepara il blocco unico di conoscenza
 	// Content include già Titolo e Tag dal blueprint V9
-	composite := fmt.Sprintf("DATE: %s
-%s", ts.Format(time.RFC3339), content)
+	composite := fmt.Sprintf("DATE: %s\n%s", ts.Format(time.RFC3339), content)
 
 	// 2. Deduplicazione tramite Hash
 	hash := sha256.Sum256([]byte(composite))
@@ -43,8 +42,7 @@ func (c *Controller) IngestMemory(content string, ts time.Time) error {
 		// Se visto negli ultimi 10 minuti, saltiamo (evita doppi salvataggi nella stessa sessione)
 		if time.Since(lastSeen) < 10*time.Minute {
 			c.cacheMu.Unlock()
-			fmt.Printf("⏩ Memory already saved recently (hash: %s), skipping.
-", hashStr[:8])
+			fmt.Printf("⏩ Memory already saved recently (hash: %s), skipping.\n", hashStr[:8])
 			return nil
 		}
 	}
