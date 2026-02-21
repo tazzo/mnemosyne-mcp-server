@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
+	"net/http"
+	"sync"
 
 	"tazlab/mnemosyne-mcp-server/internal/logic"
 	"time"
 )
 
-// Definizione schemi e messaggi MCP
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      interface{}     `json:"id"`
@@ -27,74 +27,138 @@ type JSONRPCResponse struct {
 
 type Server struct {
 	controller *logic.Controller
+	clients    map[string]chan string
+	mu         sync.RWMutex
 }
 
 func NewServer(ctrl *logic.Controller) *Server {
-	return &Server{controller: ctrl}
-}
-
-func (s *Server) Serve() {
-	decoder := json.NewDecoder(os.Stdin)
-	for {
-		var req JSONRPCRequest
-		if err := decoder.Decode(&req); err != nil {
-			if err == io.EOF { break }
-			continue
-		}
-		s.handleRequest(req)
+	return &Server{
+		controller: ctrl,
+		clients:    make(map[string]chan string),
 	}
 }
 
-func (s *Server) handleRequest(req JSONRPCRequest) {
+// Handler per l'endpoint SSE (/sse)
+func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	messageChan := make(chan string, 10)
+	s.mu.Lock()
+	s.clients[sessionID] = messageChan
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.clients, sessionID)
+		s.mu.Unlock()
+		close(messageChan)
+	}()
+
+	// Invia l'URL per i messaggi (endpoint richiesto dal protocollo MCP SSE)
+	fmt.Fprintf(w, "event: endpoint\ndata: /message?sessionId=%s\n\n", sessionID)
+	w.(http.Flusher).Flush()
+
+	for msg := range messageChan {
+		fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
+		w.(http.Flusher).Flush()
+	}
+}
+
+// Handler per l'endpoint dei messaggi (/message)
+func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	sessionID := r.URL.Query().Get("sessionId")
+	if sessionID == "" {
+		sessionID = "default"
+	}
+
+	var req JSONRPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON-RPC", http.StatusBadRequest)
+		return
+	}
+
+	// Processa la richiesta e ottiene la risposta
+	resp := s.processRequest(req)
+	
+	// Invia la risposta al client tramite il canale SSE
+	s.mu.RLock()
+	clientChan, ok := s.clients[sessionID]
+	s.mu.RUnlock()
+
+	if ok {
+		respJSON, _ := json.Marshal(resp)
+		clientChan <- string(respJSON)
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 	switch req.Method {
 	case "initialize":
-		s.sendResponse(req.ID, map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]interface{}{},
-			"serverInfo": map[string]string{
-				"name":    "mnemosyne-mcp",
-				"version": "1.0.0",
+		return JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]interface{}{
+				"protocolVersion": "2024-11-05",
+				"capabilities":    map[string]interface{}{},
+				"serverInfo": map[string]string{
+					"name":    "mnemosyne-mcp",
+					"version": "1.0.0",
+				},
 			},
-		})
+		}
 	case "tools/list":
-		s.handleListTools(req)
+		tools := []map[string]interface{}{
+			{
+				"name":        "ingest_memory",
+				"description": "Saves a detailed technical chronicle into semantic memory.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"content":   map[string]string{"type": "string", "description": "The full markdown chronicle"},
+						"timestamp": map[string]string{"type": "string", "description": "RFC3339 date"},
+					},
+					"required": []string{"content", "timestamp"},
+				},
+			},
+			{
+				"name":        "retrieve_memories",
+				"description": "Search semantic memory for past solutions.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query":     map[string]string{"type": "string", "description": "Search query"},
+						"limit":     map[string]string{"type": "integer"},
+						"days_back": map[string]string{"type": "integer"},
+					},
+					"required": []string{"query"},
+				},
+			},
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"tools": tools}}
+	
 	case "tools/call":
-		s.handleCallTool(req)
+		return s.handleToolCall(req)
 	}
+
+	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Method not found"}}
 }
 
-func (s *Server) handleListTools(req JSONRPCRequest) {
-	tools := []map[string]interface{}{
-		{
-			"name":        "ingest_memory",
-			"description": "Saves a detailed technical chronicle into semantic memory.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"content":   map[string]string{"type": "string", "description": "The full markdown chronicle (Objective, Artifacts, Failures, etc.)"},
-					"timestamp": map[string]string{"type": "string", "description": "RFC3339 formatted date (e.g. 2026-02-20T10:00:00Z)"},
-				},
-				"required": []string{"content", "timestamp"},
-			},
-		},
-		{
-			"name":        "retrieve_memories",
-			"description": "Search semantic memory for past solutions, architecture decisions or discussions.",
-			"inputSchema": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query":     map[string]string{"type": "string", "description": "Semantic search query (e.g. 'how to fix S3 400 errors')"},
-					"limit":     map[string]string{"type": "integer", "description": "Number of results (default 5)"},
-					"days_back": map[string]string{"type": "integer", "description": "Search only in the last X days"},
-				},
-				"required": []string{"query"},
-			},
-		},
-	}
-	s.sendResponse(req.ID, map[string]interface{}{"tools": tools})
-}
-
-func (s *Server) handleCallTool(req JSONRPCRequest) {
+func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 	var params struct {
 		Name      string                 `json:"name"`
 		Arguments map[string]interface{} `json:"arguments"`
@@ -110,42 +174,29 @@ func (s *Server) handleCallTool(req JSONRPCRequest) {
 
 		err := s.controller.IngestMemory(content, ts)
 		if err != nil {
-			s.sendError(req.ID, -32000, err.Error())
-		} else {
-			s.sendResponse(req.ID, map[string]interface{}{
-				"content": []map[string]string{{"type": "text", "text": "✅ Memory successfully ingested."}},
-			})
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
 		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": "✅ Memory ingested."}},
+		}}
 
 	case "retrieve_memories":
 		query, _ := params.Arguments["query"].(string)
-		limitFloat, _ := params.Arguments["limit"].(float64)
-		limit := int(limitFloat); if limit == 0 { limit = 5 }
-		daysFloat, _ := params.Arguments["days_back"].(float64)
-		daysBack := int(daysFloat)
+		limit, _ := params.Arguments["limit"].(float64)
+		daysBack, _ := params.Arguments["days_back"].(float64)
 
-		memories, err := s.controller.SearchMemories(query, limit, daysBack, "", "")
+		memories, err := s.controller.SearchMemories(query, int(limit), int(daysBack), "", "")
 		if err != nil {
-			s.sendError(req.ID, -32000, err.Error())
-		} else {
-			var resultText string
-			for _, m := range memories {
-				resultText += fmt.Sprintf("\n--- MEMORY [%s] ---\n%s\n", m.Timestamp.Format("2006-01-02"), m.Content)
-			}
-			if resultText == "" { resultText = "No memories found for this query." }
-			s.sendResponse(req.ID, map[string]interface{}{
-				"content": []map[string]string{{"type": "text", "text": resultText}},
-			})
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
 		}
+		
+		var resultText string
+		for _, m := range memories {
+			resultText += fmt.Sprintf("\n--- MEMORY [%s] ---\n%s\n", m.Timestamp.Format("2006-01-02"), m.Content)
+		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
+			"content": []map[string]string{{"type": "text", "text": resultText}},
+		}}
 	}
-}
-
-func (s *Server) sendResponse(id interface{}, result interface{}) {
-	resp := JSONRPCResponse{JSONRPC: "2.0", ID: id, Result: result}
-	json.NewEncoder(os.Stdout).Encode(resp)
-}
-
-func (s *Server) sendError(id interface{}, code int, message string) {
-	resp := JSONRPCResponse{JSONRPC: "2.0", ID: id, Error: map[string]interface{}{"code": code, "message": message}}
-	json.NewEncoder(os.Stdout).Encode(resp)
+	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Tool not found"}}
 }

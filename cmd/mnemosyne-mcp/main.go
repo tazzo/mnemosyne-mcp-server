@@ -40,15 +40,25 @@ func main() {
 	controller := logic.New(database, embedClient)
 	mcpServer := mcp.NewServer(controller)
 
-	// 3. Graceful Shutdown
+	// 3. Handlers HTTP per trasporto SSE (Remote MCP)
+	http.HandleFunc("/sse", mcpServer.HandleSSE)
+	http.HandleFunc("/message", mcpServer.HandleMessage)
+
+	// 4. Graceful Shutdown setup
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 4. Avvio Server (Standard I/O per protocollo MCP)
-	fmt.Fprintf(os.Stderr, "🧠 Mnemosyne MCP Server starting...\n")
+	// 5. Avvio Server HTTP
+	port := getEnv("PORT", "8080")
+	srv := &http.Server{Addr: ":" + port}
+
+	fmt.Fprintf(os.Stderr, "🧠 Mnemosyne MCP Server (SSE) starting on port %s...\n", port)
 	
 	go func() {
-		mcpServer.Serve()
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "❌ HTTP server error: %v\n", err)
+			os.Exit(1)
+		}
 	}()
 
 	<-sigChan
