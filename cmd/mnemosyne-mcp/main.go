@@ -31,8 +31,7 @@ func main() {
 	// 2. Inizializzazione Layer
 	database, err := db.New(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to connect to DB: %v
-", err)
+		fmt.Fprintf(os.Stderr, "❌ Failed to connect to DB: %v\n", err)
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -46,17 +45,14 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// 4. Avvio Server (Standard I/O per protocollo MCP)
-	fmt.Fprintf(os.Stderr, "🧠 Mnemosyne MCP Server starting...
-")
+	fmt.Fprintf(os.Stderr, "🧠 Mnemosyne MCP Server starting...\n")
 	
 	go func() {
 		mcpServer.Serve()
 	}()
 
 	<-sigChan
-	fmt.Fprintf(os.Stderr, "
-🔒 Shutting down gracefully...
-")
+	fmt.Fprintf(os.Stderr, "\n🔒 Shutting down gracefully...\n")
 }
 
 func getEnv(key, fallback string) string {

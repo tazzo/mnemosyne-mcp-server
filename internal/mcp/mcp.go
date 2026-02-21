@@ -130,10 +130,7 @@ func (s *Server) handleCallTool(req JSONRPCRequest) {
 		} else {
 			var resultText string
 			for _, m := range memories {
-				resultText += fmt.Sprintf("
---- MEMORY [%s] ---
-%s
-", m.Timestamp.Format("2006-01-02"), m.Content)
+				resultText += fmt.Sprintf("\n--- MEMORY [%s] ---\n%s\n", m.Timestamp.Format("2006-01-02"), m.Content)
 			}
 			if resultText == "" { resultText = "No memories found for this query." }
 			s.sendResponse(req.ID, map[string]interface{}{
