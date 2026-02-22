@@ -61,7 +61,10 @@ func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embedding API returned status %d", resp.StatusCode)
+		// Leggiamo il corpo dell'errore per il debug
+		var errBody bytes.Buffer
+		errBody.ReadFrom(resp.Body)
+		return nil, fmt.Errorf("embedding API returned status %d: %s", resp.StatusCode, errBody.String())
 	}
 
 	var res embedResponse

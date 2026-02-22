@@ -38,14 +38,15 @@ type Server struct {
 }
 
 func NewServer(ctrl *logic.Controller) *Server {
-	s := &Server{
+	return &Server{
 		controller: ctrl,
 		clients:    make(map[string]chan string),
 		jobChan:    make(chan Job, 100),
 	}
-	// Avvio del background worker
+}
+
+func (s *Server) StartWorker() {
 	go s.worker()
-	return s
 }
 
 func (s *Server) worker() {
@@ -162,6 +163,40 @@ func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) ServeStdio() {
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+
+	// Logging di debug su file fisso per non sporcare stdout
+	f, _ := os.OpenFile("/tmp/mcp-stdio.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	defer f.Close()
+	fmt.Fprintf(f, "\n🚀 [STDIO] Server starting at %v\n", time.Now())
+
+	for {
+		var req JSONRPCRequest
+		if err := decoder.Decode(&req); err != nil {
+			if err.Error() == "EOF" {
+				fmt.Fprintf(f, "🔌 [STDIO] EOF received\n")
+				return
+			}
+			fmt.Fprintf(f, "❌ [STDIO] Decode error: %v\n", err)
+			continue
+		}
+
+		fmt.Fprintf(f, "📥 [STDIO] Received method: %s (ID: %v)\n", req.Method, req.ID)
+		
+		// Gestione Notifiche (niente ID -> niente risposta)
+		if req.ID == nil {
+			s.processRequest(req) // Esegue ma ignoriamo il ritorno
+			continue
+		}
+
+		resp := s.processRequest(req)
+		fmt.Fprintf(f, "📤 [STDIO] Sending response for ID: %v\n", req.ID)
+		encoder.Encode(resp)
+	}
+}
+
 func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 	switch req.Method {
 	case "initialize":
@@ -170,7 +205,10 @@ func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 			ID:      req.ID,
 			Result: map[string]interface{}{
 				"protocolVersion": "2024-11-05",
-				"capabilities":    map[string]interface{}{},
+				"capabilities": map[string]interface{}{
+					"tools":     map[string]interface{}{},
+					"resources": map[string]interface{}{},
+				},
 				"serverInfo": map[string]string{
 					"name":    "mnemosyne-mcp",
 					"version": "1.0.0",
@@ -220,7 +258,7 @@ func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"id": map[string]string{"type": "integer", "description": "The numeric ID of the memory to delete"},
+						"id": map[string]string{"type": "string", "description": "The unique UUID of the memory to delete"},
 					},
 					"required": []string{"id"},
 				},

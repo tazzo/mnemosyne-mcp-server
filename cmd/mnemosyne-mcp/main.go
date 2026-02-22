@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"tazlab/mnemosyne-mcp-server/internal/db"
@@ -28,11 +29,13 @@ func main() {
 			apiKey = string(data)
 		}
 	}
+	// Pulizia aggressiva della chiave (rimuove apici e spazi)
+	apiKey = strings.Trim(strings.TrimSpace(apiKey), "\"'")
 
 	// 2. Inizializzazione Layer
 	database, err := db.New(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to connect to DB: %v\n", err)
+		// In modalit\u00e0 Stdio non possiamo loggare su stderr durante il bootstrap
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -41,15 +44,26 @@ func main() {
 	controller := logic.New(database, embedClient)
 	mcpServer := mcp.NewServer(controller)
 
-	// 3. Handlers HTTP per trasporto SSE (Remote MCP)
+	// 3. Selezione Trasporto (SSE o Stdio)
+	transport := getEnv("MCP_TRANSPORT", "stdio")
+
+	if transport == "stdio" {
+		mcpServer.ServeStdio() 
+		return
+	}
+
+	// 4. Avvio del background worker (solo per SSE asincrono)
+	mcpServer.StartWorker()
+
+	// 5. Handlers HTTP per trasporto SSE (Remote MCP)
 	http.HandleFunc("/sse", mcpServer.HandleSSE)
 	http.HandleFunc("/message", mcpServer.HandleMessage)
 
-	// 4. Graceful Shutdown setup
+	// 5. Graceful Shutdown setup
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 5. Avvio Server HTTP
+	// 6. Avvio Server HTTP
 	port := getEnv("PORT", "8080")
 	srv := &http.Server{Addr: ":" + port}
 
