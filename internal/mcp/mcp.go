@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/google/uuid"
 	"tazlab/mnemosyne-mcp-server/internal/logic"
 	"time"
 )
@@ -85,7 +86,7 @@ func (s *Server) worker() {
 func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
 	if sessionID == "" {
-		sessionID = "default"
+		sessionID = uuid.New().String()
 	}
 
 	fmt.Fprintf(os.Stderr, "🔌 [SSE] Connection request: sessionId=%s, remoteAddr=%s\n", sessionID, r.RemoteAddr)
