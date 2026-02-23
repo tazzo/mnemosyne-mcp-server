@@ -85,44 +85,48 @@ func (s *Server) worker() {
 // Handler per l'endpoint SSE (/sse)
 func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
-	if sessionID == "" {
+	// Forziamo un ID univoco se quello fornito \u00e8 vuoto o il generico "default"
+	if sessionID == "" || sessionID == "default" {
 		sessionID = uuid.New().String()
 	}
 
-	fmt.Fprintf(os.Stderr, "🔌 [SSE] Connection request: sessionId=%s, remoteAddr=%s\n", sessionID, r.RemoteAddr)
+	fmt.Fprintf(os.Stderr, "🔌 [SSE] New session request: %s (remote: %s)\n", sessionID, r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	messageChan := make(chan string, 100) // Buffer più grande per evitare blocchi
+	messageChan := make(chan string, 100)
 	s.mu.Lock()
 	s.clients[sessionID] = messageChan
 	s.mu.Unlock()
 
 	defer func() {
-		fmt.Fprintf(os.Stderr, "🔌 [SSE] Connection CLOSED: sessionId=%s\n", sessionID)
+		fmt.Fprintf(os.Stderr, "🔌 [SSE] Session closed: %s\n", sessionID)
 		s.mu.Lock()
 		delete(s.clients, sessionID)
 		s.mu.Unlock()
-		close(messageChan)
+		// Nota: non chiudiamo messageChan per evitare panic nel worker se scrive dopo la chiusura
 	}()
 
-	// Invia l'URL per i messaggi (endpoint richiesto dal protocollo MCP SSE)
-	// Torniamo all'URL relativo che è più standard per i proxy
-	endpointURL := fmt.Sprintf("/message?sessionId=%s", sessionID)
-	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending RELATIVE endpoint event: %s\n", endpointURL)
+	// Prepariamo l'URL ASSOLUTO per l'endpoint (fondamentale per alcuni client come Gemini CLI)
+	scheme := "http"
+	if r.TLS != nil { scheme = "https" }
+	host := r.Host
+	if host == "" { host = "192.168.1.240:8004" }
+	
+	endpointURL := fmt.Sprintf("%s://%s/message?sessionId=%s", scheme, host, sessionID)
+	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending absolute endpoint: %s\n", endpointURL)
 	
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	w.(http.Flusher).Flush()
 
-	fmt.Fprintf(os.Stderr, "👂 [SSE] Entering event loop for session %s\n", sessionID)
+	fmt.Fprintf(os.Stderr, "👂 [SSE] Loop started for %s\n", sessionID)
 	for msg := range messageChan {
-		fmt.Fprintf(os.Stderr, "📤 [SSE] Writing message event to wire for %s\n", sessionID)
 		_, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ [SSE] Write error for session %s: %v\n", sessionID, err)
+			fmt.Fprintf(os.Stderr, "❌ [SSE] Write error for %s: %v\n", sessionID, err)
 			return
 		}
 		w.(http.Flusher).Flush()
