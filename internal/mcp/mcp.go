@@ -12,7 +12,7 @@ import (
 	"tazlab/mnemosyne-mcp-server/internal/logic"
 )
 
-const ServerVersion = "2.0.0-SDK-ULTIMATE"
+const ServerVersion = "1.1.0-sdk"
 
 type Server struct {
 	mcp        *server.MCPServer
@@ -23,8 +23,6 @@ func NewServer(ctrl *logic.Controller) *Server {
 	s := server.NewMCPServer(
 		"mnemosyne-mcp",
 		ServerVersion,
-		server.WithResourceCapabilities(true, false),
-		server.WithToolCapabilities(true),
 	)
 
 	mcpServer := &Server{
@@ -40,44 +38,49 @@ func (s *Server) registerTools() {
 	// Tool: retrieve_memories
 	retrieveTool := mcp.NewTool("retrieve_memories",
 		mcp.WithDescription("Search semantic memory for past solutions and technical chronicles."),
-		mcp.WithSchema(map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"query": map[string]interface{}{
-					"type":        "string",
-					"description": "The technical query to search for",
-				},
-			},
-			"required": []string{"query"},
-		}),
 	)
+	retrieveTool.InputSchema = mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "The technical query to search for",
+			},
+		},
+		Required: []string{"query"},
+	}
 
 	s.mcp.AddTool(retrieveTool, s.handleRetrieve)
 
 	// Tool: ingest_memory
 	ingestTool := mcp.NewTool("ingest_memory",
 		mcp.WithDescription("Save a detailed technical chronicle into semantic memory."),
-		mcp.WithSchema(map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"content": map[string]interface{}{
-					"type":        "string",
-					"description": "Full markdown chronicle",
-				},
-				"timestamp": map[string]interface{}{
-					"type":        "string",
-					"description": "RFC3339 timestamp",
-				},
-			},
-			"required": []string{"content", "timestamp"},
-		}),
 	)
+	ingestTool.InputSchema = mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Full markdown chronicle",
+			},
+			"timestamp": map[string]any{
+				"type":        "string",
+				"description": "RFC3339 timestamp",
+			},
+		},
+		Required: []string{"content", "timestamp"},
+	}
 
 	s.mcp.AddTool(ingestTool, s.handleIngest)
 }
 
 func (s *Server) handleRetrieve(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	query, ok := request.Params.Arguments["query"].(string)
+	args, ok := request.Params.Arguments.(map[string]any)
+	if !ok {
+		return mcp.NewToolResultError("invalid arguments format"), nil
+	}
+
+	query, ok := args["query"].(string)
 	if !ok {
 		return mcp.NewToolResultError("missing query argument"), nil
 	}
@@ -96,8 +99,13 @@ func (s *Server) handleRetrieve(ctx context.Context, request mcp.CallToolRequest
 }
 
 func (s *Server) handleIngest(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	content, _ := request.Params.Arguments["content"].(string)
-	tsStr, _ := request.Params.Arguments["timestamp"].(string)
+	args, ok := request.Params.Arguments.(map[string]any)
+	if !ok {
+		return mcp.NewToolResultError("invalid arguments format"), nil
+	}
+
+	content, _ := args["content"].(string)
+	tsStr, _ := args["timestamp"].(string)
 	
 	ts, err := time.Parse(time.RFC3339, tsStr)
 	if err != nil {
@@ -112,7 +120,6 @@ func (s *Server) handleIngest(ctx context.Context, request mcp.CallToolRequest) 
 	return mcp.NewToolResultText("✅ Memory ingested successfully."), nil
 }
 
-// ServeStdio lancia il server in modalità Stdio (nativa per Gemini CLI locale)
 func (s *Server) ServeStdio() {
 	fmt.Fprintf(os.Stderr, "🚀 Mnemosyne MCP [%s] starting Stdio mode...\n", ServerVersion)
 	if err := server.ServeStdio(s.mcp); err != nil {
@@ -120,18 +127,17 @@ func (s *Server) ServeStdio() {
 	}
 }
 
-// ServeSSE lancia il server in modalità SSE (per il cluster Kubernetes)
 func (s *Server) ServeSSE(port string) {
 	fmt.Fprintf(os.Stderr, "🚀 Mnemosyne MCP [%s] starting SSE mode on port %s...\n", ServerVersion, port)
-	sseServer := server.NewSSEServer(s.mcp, "http://192.168.1.240:8004")
 	
-	http.HandleFunc("/sse", sseServer.HandleSSE)
-	http.HandleFunc("/message", sseServer.HandleMessage)
+	sse := server.NewSSEServer(s.mcp, server.WithBaseURL("http://192.168.1.240:8004"))
+	
+	http.Handle("/sse", sse.SSEHandler())
+	http.Handle("/message", sse.MessageHandler())
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ SSE server error: %v\n", err)
 	}
 }
 
-// StartWorker non è più necessario perché l'SDK gestisce la concorrenza internamente
 func (s *Server) StartWorker() {}
