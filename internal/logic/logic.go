@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"tazlab/mnemosyne-mcp-server/internal/db"
-	"tazlab/mnemosyne-mcp-server/internal/embedding"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/db"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/embedding"
 )
 
 type Controller struct {

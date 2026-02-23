@@ -4,10 +4,10 @@ import (
 	"os"
 	"strings"
 
-	"tazlab/mnemosyne-mcp-server/internal/db"
-	"tazlab/mnemosyne-mcp-server/internal/embedding"
-	"tazlab/mnemosyne-mcp-server/internal/logic"
-	"tazlab/mnemosyne-mcp-server/internal/mcp"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/db"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/embedding"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/logic"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/mcp"
 )
 
 func main() {

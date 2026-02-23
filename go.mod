@@ -1,4 +1,4 @@
-module tazlab/mnemosyne-mcp-server
+module github.com/tazzo/mnemosyne-mcp-server
 
 go 1.23.0
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"tazlab/mnemosyne-mcp-server/internal/logic"
+	"github.com/tazzo/mnemosyne-mcp-server/internal/logic"
 )
 
 const ServerVersion = "1.1.0-sdk"
