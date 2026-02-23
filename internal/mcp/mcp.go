@@ -53,48 +53,38 @@ func (s *Server) StartWorker() {
 func (s *Server) worker() {
 	fmt.Fprintf(os.Stderr, "🚀 Worker started and waiting for jobs...\n")
 	for job := range s.jobChan {
-		fmt.Fprintf(os.Stderr, "👷 Worker: PICKED UP job from session %s (Method: %s, ID: %v)\n", job.SessionID, job.Request.Method, job.Request.ID)
+		fmt.Fprintf(os.Stderr, "👷 Worker: Processing session %s (Method: %s)\n", job.SessionID, job.Request.Method)
 		
-		// Processa la richiesta (una alla volta)
-		start := time.Now()
 		resp := s.processRequest(job.Request)
-		duration := time.Since(start)
 		
-		fmt.Fprintf(os.Stderr, "🧠 Worker: logic.ProcessRequest finished in %v for session %s\n", duration, job.SessionID)
-		
-		// Invia la risposta al client specifico tramite il suo canale SSE
 		s.mu.RLock()
 		clientChan, ok := s.clients[job.SessionID]
 		s.mu.RUnlock()
 
 		if ok {
-			fmt.Fprintf(os.Stderr, "📤 Worker: Attempting to send response to SSE channel for %s\n", job.SessionID)
 			respJSON, _ := json.Marshal(resp)
 			select {
 			case clientChan <- string(respJSON):
-				fmt.Fprintf(os.Stderr, "✅ Worker: Response successfully delivered to SSE channel for %s\n", job.SessionID)
-			case <-time.After(15 * time.Second):
-				fmt.Fprintf(os.Stderr, "⚠️ Worker: TIMEOUT (15s) while sending response to session %s - channel full?\n", job.SessionID)
+				fmt.Fprintf(os.Stderr, "✅ Worker: Response delivered to %s\n", job.SessionID)
+			case <-time.After(10 * time.Second):
+				fmt.Fprintf(os.Stderr, "⚠️ Worker: Timeout for %s\n", job.SessionID)
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "❌ Worker: ABORTED - Client session %s DISCONNECTED before response could be sent\n", job.SessionID)
 		}
 	}
 }
 
-// Handler per l'endpoint SSE (/sse)
 func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
-	// Forziamo un ID univoco se quello fornito \u00e8 vuoto o il generico "default"
 	if sessionID == "" || sessionID == "default" {
 		sessionID = uuid.New().String()
 	}
 
-	fmt.Fprintf(os.Stderr, "🔌 [SSE] New session request: %s (remote: %s)\n", sessionID, r.RemoteAddr)
+	fmt.Fprintf(os.Stderr, "🔌 [SSE] New Session: %s\n", sessionID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	messageChan := make(chan string, 100)
@@ -103,101 +93,55 @@ func (s *Server) HandleSSE(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	defer func() {
-		fmt.Fprintf(os.Stderr, "🔌 [SSE] Session closed: %s\n", sessionID)
+		fmt.Fprintf(os.Stderr, "🔌 [SSE] Closed: %s\n", sessionID)
 		s.mu.Lock()
 		delete(s.clients, sessionID)
 		s.mu.Unlock()
-		// Nota: non chiudiamo messageChan per evitare panic nel worker se scrive dopo la chiusura
 	}()
 
-	// Prepariamo l'URL ASSOLUTO per l'endpoint (fondamentale per alcuni client come Gemini CLI)
-	scheme := "http"
-	if r.TLS != nil { scheme = "https" }
 	host := r.Host
 	if host == "" { host = "192.168.1.240:8004" }
-	
-	endpointURL := fmt.Sprintf("%s://%s/message?sessionId=%s", scheme, host, sessionID)
-	fmt.Fprintf(os.Stderr, "📡 [SSE] Sending absolute endpoint: %s\n", endpointURL)
+	endpointURL := fmt.Sprintf("http://%s/message?sessionId=%s", host, sessionID)
 	
 	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpointURL)
 	w.(http.Flusher).Flush()
 
-	fmt.Fprintf(os.Stderr, "👂 [SSE] Loop started for %s\n", sessionID)
+	fmt.Fprintf(os.Stderr, "👂 [SSE] Loop started: %s\n", sessionID)
 	for msg := range messageChan {
-		_, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ [SSE] Write error for %s: %v\n", sessionID, err)
-			return
-		}
+		fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg)
 		w.(http.Flusher).Flush()
 	}
 }
 
-// Handler per l'endpoint dei messaggi (/message)
 func (s *Server) HandleMessage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("sessionId")
-	if sessionID == "" {
-		sessionID = "default"
-	}
-
-	if r.Method != http.MethodPost {
-		fmt.Fprintf(os.Stderr, "🚫 [MSG] Rejected non-POST request from %s (Method: %s)\n", sessionID, r.Method)
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "📥 [MSG] Incoming request from %s (Size: %d bytes)\n", sessionID, r.ContentLength)
+	if sessionID == "" { sessionID = "default" }
 
 	var req JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ [MSG] JSON Decode ERROR from %s: %v\n", sessionID, err)
-		http.Error(w, "Invalid JSON-RPC", http.StatusBadRequest)
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "📥 [MSG] Request validated: sessionId=%s, method=%s, id=%v\n", sessionID, req.Method, req.ID)
-
-	// Mettiamo la richiesta in coda
 	select {
 	case s.jobChan <- Job{SessionID: sessionID, Request: req}:
-		fmt.Fprintf(os.Stderr, "📥 [MSG] Job ENQUEUED successfully for session %s\n", sessionID)
 		w.WriteHeader(http.StatusAccepted)
 	default:
-		fmt.Fprintf(os.Stderr, "🚨 [MSG] Job Queue FULL! Dropping request from session %s\n", sessionID)
-		http.Error(w, "Server too busy", http.StatusServiceUnavailable)
+		http.Error(w, "Busy", http.StatusServiceUnavailable)
 	}
 }
 
 func (s *Server) ServeStdio() {
 	decoder := json.NewDecoder(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
-
-	// Logging di debug su file fisso per non sporcare stdout
-	f, _ := os.OpenFile("/tmp/mcp-stdio.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	defer f.Close()
-	fmt.Fprintf(f, "\n🚀 [STDIO] Server starting at %v\n", time.Now())
-
 	for {
 		var req JSONRPCRequest
-		if err := decoder.Decode(&req); err != nil {
-			if err.Error() == "EOF" {
-				fmt.Fprintf(f, "🔌 [STDIO] EOF received\n")
-				return
-			}
-			fmt.Fprintf(f, "❌ [STDIO] Decode error: %v\n", err)
-			continue
-		}
-
-		fmt.Fprintf(f, "📥 [STDIO] Received method: %s (ID: %v)\n", req.Method, req.ID)
-		
-		// Gestione Notifiche (niente ID -> niente risposta)
+		if err := decoder.Decode(&req); err != nil { return }
 		if req.ID == nil {
-			s.processRequest(req) // Esegue ma ignoriamo il ritorno
+			s.processRequest(req)
 			continue
 		}
-
 		resp := s.processRequest(req)
-		fmt.Fprintf(f, "📤 [STDIO] Sending response for ID: %v\n", req.ID)
 		encoder.Encode(resp)
 	}
 }
@@ -214,108 +158,62 @@ func (s *Server) processRequest(req JSONRPCRequest) JSONRPCResponse {
 					"tools":     map[string]interface{}{},
 					"resources": map[string]interface{}{},
 				},
-				"serverInfo": map[string]string{
-					"name":    "mnemosyne-mcp",
-					"version": "1.0.0",
-				},
+				"serverInfo": map[string]string{"name": "mnemosyne-mcp", "version": "1.0.0"},
 			},
 		}
 	case "tools/list":
 		tools := []map[string]interface{}{
 			{
-				"name":        "ingest_memory",
-				"description": "Saves a detailed technical chronicle into semantic memory.",
-				"inputSchema": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"content":   map[string]string{"type": "string", "description": "The full markdown chronicle"},
-						"timestamp": map[string]string{"type": "string", "description": "RFC3339 date"},
-					},
-					"required": []string{"content", "timestamp"},
-				},
-			},
-			{
-				"name":        "retrieve_memories",
+				"name": "retrieve_memories",
 				"description": "Search semantic memory for past solutions.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"query":     map[string]string{"type": "string", "description": "Search query"},
-						"limit":     map[string]string{"type": "integer"},
-						"days_back": map[string]string{"type": "integer"},
+						"query": {"type": "string", "description": "Search query"},
 					},
 					"required": []string{"query"},
 				},
 			},
 			{
-				"name":        "list_memories",
-				"description": "List the most recent memories with their IDs.",
+				"name": "ingest_memory",
+				"description": "Saves a detailed technical chronicle.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"limit": map[string]string{"type": "integer", "description": "Number of memories to list (default 10)"},
+						"content": {"type": "string"},
+						"timestamp": {"type": "string"},
+					},
+					"required": []string{"content", "timestamp"},
+				},
+			},
+			{
+				"name": "list_memories",
+				"description": "List recent memory IDs.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"limit": {"type": "integer"},
 					},
 				},
 			},
 			{
-				"name":        "delete_memory",
-				"description": "Delete a specific memory by its ID.",
+				"name": "delete_memory",
+				"description": "Delete a specific memory.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"id": map[string]string{"type": "string", "description": "The unique UUID of the memory to delete"},
+						"id": {"type": "string"},
 					},
 					"required": []string{"id"},
 				},
 			},
-			{
-				"name":        "update_blueprint",
-				"description": "Update the extraction protocol rules (blueprint) for future memories.",
-				"inputSchema": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"content": map[string]string{"type": "string", "description": "The new extraction blueprint in Markdown"},
-					},
-					"required": []string{"content"},
-				},
-			},
 		}
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"tools": tools}}
-	
 	case "resources/list":
-		resources := []map[string]interface{}{
-			{
-				"uri":         "resource://mnemosyne/blueprint",
-				"name":        "Extraction Blueprint",
-				"description": "Current TAZLAB protocol for memory extraction",
-				"mimeType":    "text/markdown",
-			},
-		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"resources": resources}}
-
-	case "resources/read":
-		var params struct {
-			URI string `json:"uri"`
-		}
-		json.Unmarshal(req.Params, &params)
-		if params.URI == "resource://mnemosyne/blueprint" {
-			blueprint, _ := s.controller.GetBlueprint()
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-				"contents": []map[string]interface{}{
-					{
-						"uri":      params.URI,
-						"mimeType": "text/markdown",
-						"text":     blueprint,
-					},
-				},
-			}}
-		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32602, "message": "Resource not found"}}
-
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"resources": []interface{}{}}}
 	case "tools/call":
 		return s.handleToolCall(req)
 	}
-
 	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Method not found"}}
 }
 
@@ -327,36 +225,12 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 	json.Unmarshal(req.Params, &params)
 
 	switch params.Name {
-	case "ingest_memory":
-		content, _ := params.Arguments["content"].(string)
-		tsStr, _ := params.Arguments["timestamp"].(string)
-		ts, _ := time.Parse(time.RFC3339, tsStr)
-		if ts.IsZero() { ts = time.Now() }
-
-		err := s.controller.IngestMemory(content, ts)
-		if err != nil {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
-		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": "✅ Memory ingested."}},
-		}}
-
 	case "retrieve_memories":
 		query, _ := params.Arguments["query"].(string)
-		limit := 5
-		if l, ok := params.Arguments["limit"].(float64); ok {
-			limit = int(l)
-		}
-		daysBack := 0
-		if d, ok := params.Arguments["days_back"].(float64); ok {
-			daysBack = int(d)
-		}
-
-		memories, err := s.controller.SearchMemories(query, limit, daysBack, "", "")
+		memories, err := s.controller.SearchMemories(query, 5, 0, "", "")
 		if err != nil {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"message": err.Error()}}
 		}
-		
 		var resultText string
 		for _, m := range memories {
 			resultText += fmt.Sprintf("\n--- MEMORY [%s] [%s] ---\n%s\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content)
@@ -364,52 +238,27 @@ func (s *Server) handleToolCall(req JSONRPCRequest) JSONRPCResponse {
 		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
 			"content": []map[string]string{{"type": "text", "text": resultText}},
 		}}
-
-	case "list_memories":
-		limit := 10
-		if l, ok := params.Arguments["limit"].(float64); ok {
-			limit = int(l)
-		}
-		memories, err := s.controller.ListMemories(limit)
+	case "ingest_memory":
+		content, _ := params.Arguments["content"].(string)
+		tsStr, _ := params.Arguments["timestamp"].(string)
+		ts, _ := time.Parse(time.RFC3339, tsStr)
+		if ts.IsZero() { ts = time.Now() }
+		err := s.controller.IngestMemory(content, ts)
 		if err != nil {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
+			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"message": err.Error()}}
 		}
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"content": []map[string]string{{"type": "text", "text": "✅ OK"}}}}
+	case "list_memories":
+		memories, _ := s.controller.ListMemories(10)
 		var resultText string
 		for _, m := range memories {
-			resultText += fmt.Sprintf("ID: %s | Date: %s | Preview: %s...\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content[:100])
+			resultText += fmt.Sprintf("ID: %s | Date: %s\n", m.ID, m.Timestamp.Format("2006-01-02"))
 		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": resultText}},
-		}}
-
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"content": []map[string]string{{"type": "text", "text": resultText}}}}
 	case "delete_memory":
 		id, _ := params.Arguments["id"].(string)
-		if id == "" {
-			// Fallback if client sends numeric ID by mistake (though unlikely with UUIDs)
-			if idFloat, ok := params.Arguments["id"].(float64); ok {
-				id = fmt.Sprintf("%.0f", idFloat)
-			}
-		}
-		err := s.controller.DeleteMemory(id)
-		if err != nil {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
-		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("✅ Memory %s deleted.", id)}},
-		}}
-
-	case "update_blueprint":
-		content, _ := params.Arguments["content"].(string)
-		if content == "" {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32602, "message": "Content is required"}}
-		}
-		err := s.controller.UpdateBlueprint(content)
-		if err != nil {
-			return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32000, "message": err.Error()}}
-		}
-		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{
-			"content": []map[string]string{{"type": "text", "text": "✅ Extraction blueprint updated in database."}},
-		}}
+		s.controller.DeleteMemory(id)
+		return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]interface{}{"content": []map[string]string{{"type": "text", "text": "✅ Deleted"}}}}
 	}
-	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"code": -32601, "message": "Tool not found"}}
+	return JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: map[string]interface{}{"message": "Tool not found"}}
 }
