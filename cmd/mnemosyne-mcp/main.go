@@ -1,12 +1,8 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"tazlab/mnemosyne-mcp-server/internal/db"
 	"tazlab/mnemosyne-mcp-server/internal/embedding"
@@ -24,18 +20,15 @@ func main() {
 	
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		// Fallback per test locale se non in container
 		if data, err := os.ReadFile("/home/tazpod/secrets/gemini-api-key"); err == nil {
 			apiKey = string(data)
 		}
 	}
-	// Pulizia aggressiva della chiave (rimuove apici e spazi)
 	apiKey = strings.Trim(strings.TrimSpace(apiKey), "\"'")
 
 	// 2. Inizializzazione Layer
 	database, err := db.New(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
-		// In modalit\u00e0 Stdio non possiamo loggare su stderr durante il bootstrap
 		os.Exit(1)
 	}
 	defer database.Close()
@@ -44,40 +37,15 @@ func main() {
 	controller := logic.New(database, embedClient)
 	mcpServer := mcp.NewServer(controller)
 
-	// 3. Selezione Trasporto (SSE o Stdio)
+	// 3. Selezione Trasporto (Default: Stdio per CLI nativa)
 	transport := getEnv("MCP_TRANSPORT", "stdio")
-
-	if transport == "stdio" {
-		mcpServer.ServeStdio() 
-		return
-	}
-
-	// 4. Avvio del background worker (solo per SSE asincrono)
-	mcpServer.StartWorker()
-
-	// 5. Handlers HTTP per trasporto SSE (Remote MCP)
-	http.HandleFunc("/sse", mcpServer.HandleSSE)
-	http.HandleFunc("/message", mcpServer.HandleMessage)
-
-	// 5. Graceful Shutdown setup
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// 6. Avvio Server HTTP
 	port := getEnv("PORT", "8080")
-	srv := &http.Server{Addr: ":" + port}
 
-	fmt.Fprintf(os.Stderr, "🧠 Mnemosyne MCP Server (SSE) starting on port %s...\n", port)
-	
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "❌ HTTP server error: %v\n", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-sigChan
-	fmt.Fprintf(os.Stderr, "\n🔒 Shutting down gracefully...\n")
+	if transport == "sse" {
+		mcpServer.ServeSSE(port)
+	} else {
+		mcpServer.ServeStdio()
+	}
 }
 
 func getEnv(key, fallback string) string {
