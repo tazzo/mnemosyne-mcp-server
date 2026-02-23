@@ -12,7 +12,7 @@ import (
 	"tazlab/mnemosyne-mcp-server/internal/logic"
 )
 
-const ServerVersion = "1.1.0-sdk"
+const ServerVersion = "2.0.0-SDK-ULTIMATE"
 
 type Server struct {
 	mcp        *server.MCPServer
