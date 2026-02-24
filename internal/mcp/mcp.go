@@ -11,7 +11,7 @@ import (
 	"github.com/tazzo/mnemosyne-mcp-server/internal/logic"
 )
 
-const ServerVersion = "1.1.1-sdk"
+const ServerVersion = "1.1.2-sdk"
 
 type Server struct {
 	mcp        *server.MCPServer
@@ -71,15 +71,27 @@ func (s *Server) registerTools() {
 		Required: []string{"id"},
 	}
 	s.mcp.AddTool(del, s.handleDelete)
+
+	// update_blueprint
+	updateBP := mcp.NewTool("update_blueprint", mcp.WithDescription("Update extraction protocol"))
+	updateBP.InputSchema = mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{"content": map[string]any{"type": "string"}},
+		Required: []string{"content"},
+	}
+	s.mcp.AddTool(updateBP, s.handleUpdateBlueprint)
+
+	// get_blueprint
+	getBP := mcp.NewTool("get_blueprint", mcp.WithDescription("Retrieve current protocol"))
+	getBP.InputSchema = mcp.ToolInputSchema{Type: "object"}
+	s.mcp.AddTool(getBP, s.handleGetBlueprint)
 }
 
 func (s *Server) handleRetrieve(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args, _ := request.Params.Arguments.(map[string]any)
 	query, _ := args["query"].(string)
 	memories, err := s.controller.SearchMemories(query, 5, 0, "", "")
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
+	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
 	var res string
 	for _, m := range memories {
 		res += fmt.Sprintf("\n--- [%s] [%s] ---\n%s\n", m.ID, m.Timestamp.Format("2006-01-02"), m.Content)
@@ -91,9 +103,9 @@ func (s *Server) handleIngest(ctx context.Context, request mcp.CallToolRequest) 
 	args, _ := request.Params.Arguments.(map[string]any)
 	content, _ := args["content"].(string)
 	tsStr, _ := args["timestamp"].(string)
-	ts, err := time.Parse(time.RFC3339, tsStr)
-	if err != nil { ts = time.Now() }
-	err = s.controller.IngestMemory(content, ts)
+	ts, _ := time.Parse(time.RFC3339, tsStr)
+	if ts.IsZero() { ts = time.Now() }
+	err := s.controller.IngestMemory(content, ts)
 	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
 	return mcp.NewToolResultText("✅ OK"), nil
 }
@@ -116,12 +128,24 @@ func (s *Server) handleDelete(ctx context.Context, request mcp.CallToolRequest) 
 	id, _ := args["id"].(string)
 	err := s.controller.DeleteMemory(id)
 	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
-	return mcp.NewToolResultText(fmt.Sprintf("✅ Memory %s deleted.", id)), nil
+	return mcp.NewToolResultText("✅ Deleted"), nil
 }
 
-func (s *Server) ServeStdio() {
-	server.ServeStdio(s.mcp)
+func (s *Server) handleUpdateBlueprint(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, _ := request.Params.Arguments.(map[string]any)
+	content, _ := args["content"].(string)
+	err := s.controller.UpdateBlueprint(content)
+	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
+	return mcp.NewToolResultText("✅ Blueprint updated."), nil
 }
+
+func (s *Server) handleGetBlueprint(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	bp, err := s.controller.GetBlueprint()
+	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
+	return mcp.NewToolResultText(bp), nil
+}
+
+func (s *Server) ServeStdio() { server.ServeStdio(s.mcp) }
 
 func (s *Server) ServeSSE(port string) {
 	sse := server.NewSSEServer(s.mcp, server.WithBaseURL("http://192.168.1.240:8004"))
