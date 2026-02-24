@@ -12,7 +12,7 @@ import (
 
 func main() {
 	// 1. Caricamento Configurazione
-	dbHost := getEnv("DB_HOST", "192.168.1.241")
+	dbHost := getEnv("DB_HOST", "tazlab-db-primary.tazlab-db.svc")
 	dbPort := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "mnemosyne")
 	dbPass := getEnv("DB_PASS", "dyUuu54TOA8zGMkc)4JFNLYF")
