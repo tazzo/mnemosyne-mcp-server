@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -11,7 +12,7 @@ import (
 	"github.com/tazzo/mnemosyne-mcp-server/internal/logic"
 )
 
-const ServerVersion = "1.1.2-sdk"
+const ServerVersion = "1.1.3-sdk"
 
 type Server struct {
 	mcp        *server.MCPServer
@@ -56,7 +57,7 @@ func (s *Server) registerTools() {
 	s.mcp.AddTool(ingest, s.handleIngest)
 
 	// list_memories
-	list := mcp.NewTool("list_memories", mcp.WithDescription("List recent memory IDs"))
+	list := mcp.NewTool("list_memories", mcp.WithDescription("List recent memory IDs and titles"))
 	list.InputSchema = mcp.ToolInputSchema{
 		Type: "object",
 		Properties: map[string]any{"limit": map[string]any{"type": "integer"}},
@@ -103,9 +104,9 @@ func (s *Server) handleIngest(ctx context.Context, request mcp.CallToolRequest) 
 	args, _ := request.Params.Arguments.(map[string]any)
 	content, _ := args["content"].(string)
 	tsStr, _ := args["timestamp"].(string)
-	ts, _ := time.Parse(time.RFC3339, tsStr)
-	if ts.IsZero() { ts = time.Now() }
-	err := s.controller.IngestMemory(content, ts)
+	ts, err := time.Parse(time.RFC3339, tsStr)
+	if err != nil { ts = time.Now() }
+	err = s.controller.IngestMemory(content, ts)
 	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
 	return mcp.NewToolResultText("✅ OK"), nil
 }
@@ -118,7 +119,8 @@ func (s *Server) handleList(ctx context.Context, request mcp.CallToolRequest) (*
 	if err != nil { return mcp.NewToolResultError(err.Error()), nil }
 	var res string
 	for _, m := range memories {
-		res += fmt.Sprintf("ID: %s | Date: %s\n", m.ID, m.Timestamp.Format("2006-01-02"))
+		title := extractTitle(m.Content)
+		res += fmt.Sprintf("ID: %s | Date: %s | Title: %s\n", m.ID, m.Timestamp.Format("2006-01-02"), title)
 	}
 	return mcp.NewToolResultText(res), nil
 }
@@ -152,6 +154,20 @@ func (s *Server) ServeSSE(port string) {
 	http.Handle("/sse", sse.SSEHandler())
 	http.Handle("/message", sse.MessageHandler())
 	http.ListenAndServe(":"+port, nil)
+}
+
+func extractTitle(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "TITLE: ") {
+			return strings.TrimPrefix(line, "TITLE: ")
+		}
+	}
+	// Fallback se il titolo non è nel formato V9/V10
+	if len(content) > 50 {
+		return content[:50] + "..."
+	}
+	return content
 }
 
 func (s *Server) StartWorker() {}
