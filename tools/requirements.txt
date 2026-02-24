@@ -1,0 +1,6 @@
+google-genai
+psycopg2-binary
+google-cloud-alloydb-connector
+pyyaml
+openai
+requests
