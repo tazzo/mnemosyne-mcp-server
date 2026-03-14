@@ -41,8 +41,8 @@ func main() {
 	transport := getEnv("MCP_TRANSPORT", "stdio")
 	port := getEnv("PORT", "8080")
 
-	if transport == "sse" {
-		mcpServer.ServeSSE(port)
+	if transport == "http" {
+		mcpServer.ServeHTTP(port)
 	} else {
 		mcpServer.ServeStdio()
 	}

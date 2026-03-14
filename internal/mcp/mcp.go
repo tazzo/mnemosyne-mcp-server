@@ -149,10 +149,9 @@ func (s *Server) handleGetBlueprint(ctx context.Context, request mcp.CallToolReq
 
 func (s *Server) ServeStdio() { server.ServeStdio(s.mcp) }
 
-func (s *Server) ServeSSE(port string) {
-	sse := server.NewSSEServer(s.mcp, server.WithBaseURL("http://192.168.1.240:8004"))
-	http.Handle("/sse", sse.SSEHandler())
-	http.Handle("/message", sse.MessageHandler())
+func (s *Server) ServeHTTP(port string) {
+	streamable := server.NewStreamableHTTPServer(s.mcp)
+	http.Handle("/mcp", streamable)
 	http.ListenAndServe(":"+port, nil)
 }
 
