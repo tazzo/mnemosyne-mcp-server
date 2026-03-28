@@ -33,15 +33,6 @@ func New(host, port, user, password, dbname string) (*DB, error) {
 		return nil, err
 	}
 
-	// T0.1: Ensure idempotency columns exist
-	_, err = pool.Exec(`
-		ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_hash TEXT UNIQUE;
-		ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to add idempotency columns to memories table: %w", err)
-	}
-
 	// T0.2: Discover Embedding Dimensions
 	// Fallback to 3072 if table is empty (e.g. text-embedding-004)
 	var dims int
