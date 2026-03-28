@@ -5,7 +5,7 @@ import threading
 import time
 import sys
 
-SERVER_URL = "http://192.168.1.240:8004"
+SERVER_URL = "http://192.168.1.240:8004/mcp"
 SESSION_ID = str(uuid.uuid4())
 
 def sse_listener(session_id):
