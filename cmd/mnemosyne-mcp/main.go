@@ -42,6 +42,7 @@ func main() {
 	// 2. Inizializzazione Layer
 	database, err := db.New(dbHost, dbPort, dbUser, dbPass, dbName)
 	if err != nil {
+		slog.Error("Failed to initialize DB", "error", err)
 		os.Exit(1)
 	}
 	defer database.Close()
