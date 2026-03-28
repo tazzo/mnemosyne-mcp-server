@@ -216,10 +216,8 @@ func (s *Server) handleDelete(ctx context.Context, request mcp.CallToolRequest) 
 func (s *Server) ServeStdio() { server.ServeStdio(s.mcp) }
 
 func (s *Server) ServeHTTP(port string) {
-	sseServer := server.NewSSEServer(s.mcp, server.WithStaticBasePath("/mcp"))
-	// Listen on both /mcp and root for maximum compatibility
-	http.Handle("/mcp/", sseServer)
-	http.Handle("/", sseServer)
+	streamable := server.NewStreamableHTTPServer(s.mcp, server.WithEndpointPath("/mcp"))
+	http.Handle("/", streamable)
 	http.ListenAndServe(":"+port, nil)
 }
 
