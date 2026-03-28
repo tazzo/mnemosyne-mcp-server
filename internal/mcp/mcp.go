@@ -228,8 +228,9 @@ func extractTitle(content string) string {
 			return strings.TrimPrefix(line, "TITLE: ")
 		}
 	}
+	title := content
 	if len(content) > 50 {
-		return content[:50] + "..."
+		title = content[:50]
 	}
-	return content
+	return strings.ReplaceAll(title, "\n", " ")
 }
