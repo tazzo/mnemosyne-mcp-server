@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"strings"
 
@@ -11,13 +12,25 @@ import (
 )
 
 func main() {
+	// Configure slog based on LOG_FORMAT environment variable
+	logFormat := getEnv("LOG_FORMAT", "text")
+	var handler slog.Handler
+	if logFormat == "json" {
+		handler = slog.NewJSONHandler(os.Stderr, nil)
+	} else {
+		handler = slog.NewTextHandler(os.Stderr, nil)
+	}
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+
 	// 1. Caricamento Configurazione
+	slog.Info("Starting mnemosyne-mcp-server")
 	dbHost := getEnv("DB_HOST", "tazlab-db-primary.tazlab-db.svc")
 	dbPort := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "mnemosyne")
 	dbPass := getEnv("DB_PASS", "dyUuu54TOA8zGMkc)4JFNLYF")
 	dbName := getEnv("DB_NAME", "mnemosyne")
-	
+
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		if data, err := os.ReadFile("/home/tazpod/secrets/gemini-api-key"); err == nil {

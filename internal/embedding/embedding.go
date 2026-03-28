@@ -43,7 +43,7 @@ func New(apiKey string) *Client {
 
 func (c *Client) GetEmbedding(text string) ([]float32, error) {
 	url := fmt.Sprintf(APIURL, c.model, c.apiKey)
-	
+
 	reqBody := embedRequest{}
 	reqBody.Content.Parts = []struct {
 		Text string `json:"text"`

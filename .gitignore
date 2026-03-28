@@ -1,0 +1,11 @@
+# Binaries
+bin/
+mnemosyne-mcp
+mnemosyne-mcp-server
+
+# Env files
+.env
+.env.*
+
+# Logs
+*.log
