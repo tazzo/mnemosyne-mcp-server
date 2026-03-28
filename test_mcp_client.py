@@ -1,34 +1,11 @@
 import requests
 import json
-import uuid
-import threading
 import time
-import sys
 
 SERVER_URL = "http://192.168.1.240:8004/mcp"
-SESSION_ID = str(uuid.uuid4())
 
-def sse_listener(session_id):
-    print(f"👂 Starting SSE listener for session {session_id}...")
-    try:
-        response = requests.get(f"{SERVER_URL}/sse?sessionId={session_id}", stream=True, timeout=30)
-        for line in response.iter_lines():
-            if line:
-                decoded_line = line.decode('utf-8')
-                print(f"📥 SSE Received: {decoded_line}")
-    except Exception as e:
-        print(f"❌ SSE Listener Error: {e}")
-
-def test_mcp():
-    print(f"🚀 Testing Mnemosyne MCP Server at {SERVER_URL}")
-    print(f"🆔 Session ID: {SESSION_ID}")
-
-    # Start SSE listener in a background thread
-    listener_thread = threading.Thread(target=sse_listener, args=(SESSION_ID,), daemon=True)
-    listener_thread.start()
-    
-    # Wait for listener to establish connection
-    time.sleep(2)
+def test_mcp_streamable():
+    print(f"🚀 Testing Mnemosyne MCP (Streamable HTTP) at {SERVER_URL}")
 
     # 1. Test Tools List
     print("\n--- Testing 'tools/list' ---")
@@ -39,16 +16,19 @@ def test_mcp():
         "params": {}
     }
     try:
-        response = requests.post(f"{SERVER_URL}/message?sessionId={SESSION_ID}", json=payload, timeout=10)
-        print(f"✅ Tools List Request Sent. Status: {response.status_code}")
+        # StreamableHTTP uses specific endpoints per method
+        response = requests.post(f"{SERVER_URL}/tools/list", json=payload, timeout=10)
+        print(f"Status: {response.status_code}")
+        if response.status_code == 200:
+            print(f"✅ Tools: {json.dumps(response.json(), indent=2)}")
+        else:
+            print(f"❌ Failed: {response.text}")
     except Exception as e:
         print(f"❌ Connection Failed: {e}")
         return
 
-    time.sleep(2)
-
-    # 2. Test Ingest Memory
-    print("\n--- Testing 'ingest_memory' ---")
+    # 2. Test Ingest Memory (Asynchronous)
+    print("\n--- Testing 'ingest_memory' (Async) ---")
     ingest_payload = {
         "jsonrpc": "2.0",
         "id": 2,
@@ -56,17 +36,20 @@ def test_mcp():
         "params": {
             "name": "ingest_memory",
             "arguments": {
-                "content": "### TAZLAB MANUAL: MCP DEPLOYMENT\nSuccessfully deployed Mnemosyne MCP server in Go (Distroless) on TazLab Cluster.",
-                "timestamp": "2026-02-21T11:00:00Z"
+                "content": "### TAZLAB TEST: STREAMABLE HTTP\nVerification of the new Streamable HTTP transport and asynchronous ingestion.",
+                "timestamp": "2026-03-28T23:30:00Z"
             }
         }
     }
-    response = requests.post(f"{SERVER_URL}/message?sessionId={SESSION_ID}", json=ingest_payload, timeout=10)
-    print(f"✅ Ingest Request Sent. Status: {response.status_code}")
+    response = requests.post(f"{SERVER_URL}/tools/call", json=ingest_payload, timeout=10)
+    print(f"Status: {response.status_code}")
+    if response.status_code == 200:
+        print(f"✅ Response: {json.dumps(response.json(), indent=2)}")
+    else:
+        print(f"❌ Failed: {response.text}")
 
-    time.sleep(5)
-
-    # 3. Test List Memories (to verify ingestion)
+    # 3. Test List Memories (to verify)
+    time.sleep(2) # Wait for worker
     print("\n--- Testing 'list_memories' ---")
     list_payload = {
         "jsonrpc": "2.0",
@@ -74,19 +57,14 @@ def test_mcp():
         "method": "tools/call",
         "params": {
             "name": "list_memories",
-            "arguments": {"limit": 5}
+            "arguments": {"limit": 3}
         }
     }
-    response = requests.post(f"{SERVER_URL}/message?sessionId={SESSION_ID}", json=list_payload, timeout=10)
-    print(f"✅ List Request Sent. Status: {response.status_code}")
+    response = requests.post(f"{SERVER_URL}/tools/call", json=list_payload, timeout=10)
+    if response.status_code == 200:
+        print(f"✅ List Result: {json.dumps(response.json(), indent=2)}")
 
-    # Give some time to receive the last response
-    time.sleep(5)
     print("\n✨ Test sequence finished.")
 
 if __name__ == "__main__":
-    test_mcp()
-
-
-if __name__ == "__main__":
-    test_mcp()
+    test_mcp_streamable()

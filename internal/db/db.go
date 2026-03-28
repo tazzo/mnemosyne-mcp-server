@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -41,14 +42,13 @@ func New(host, port, user, password, dbname string) (*DB, error) {
 		if err == sql.ErrNoRows {
 			// Database vuoto o nessuna embedding presente, usa fallback
 			dims = 3072
-			fmt.Printf("⚠️ No existing embeddings found, defaulting to %d dimensions\n", dims)
+			slog.Warn("No existing embeddings found, defaulting dimension", "dims", dims)
 		} else {
 			return nil, fmt.Errorf("failed to autodiscover embedding dimensions: %w", err)
 		}
 	} else {
-		fmt.Printf("✅ Autodiscovered embedding dimensions: %d\n", dims)
+		slog.Info("Autodiscovered embedding dimensions", "dims", dims)
 	}
-
 	return &DB{pool: pool}, nil
 }
 
