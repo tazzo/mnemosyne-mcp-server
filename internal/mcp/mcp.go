@@ -217,7 +217,7 @@ func (s *Server) ServeStdio() { server.ServeStdio(s.mcp) }
 
 func (s *Server) ServeHTTP(port string) {
 	streamable := server.NewStreamableHTTPServer(s.mcp)
-	http.Handle("/mcp", streamable)
+	http.Handle("/", streamable)
 	http.ListenAndServe(":"+port, nil)
 }
 
