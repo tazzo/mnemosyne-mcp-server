@@ -13,7 +13,7 @@ import (
 
 func main() {
 	// Configure slog based on LOG_FORMAT environment variable
-	logFormat := getEnv("LOG_FORMAT", "text")
+	logFormat := os.Getenv("LOG_FORMAT")
 	var handler slog.Handler
 	if logFormat == "json" {
 		handler = slog.NewJSONHandler(os.Stderr, nil)
@@ -23,20 +23,43 @@ func main() {
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
 
-	// 1. Caricamento Configurazione
 	slog.Info("Starting mnemosyne-mcp-server")
-	dbHost := getEnv("DB_HOST", "tazlab-db-primary.tazlab-db.svc")
-	dbPort := getEnv("DB_PORT", "5432")
-	dbUser := getEnv("DB_USER", "mnemosyne")
-	dbPass := getEnv("DB_PASS", "dyUuu54TOA8zGMkc)4JFNLYF")
-	dbName := getEnv("DB_NAME", "mnemosyne")
 
+	// 1. Mandatory Configuration (Fail Fast)
+	dbHost := os.Getenv("DB_HOST")
+	dbPort := os.Getenv("DB_PORT")
+	dbUser := os.Getenv("DB_USER")
+	dbPass := os.Getenv("DB_PASS")
+	dbName := os.Getenv("DB_NAME")
 	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		if data, err := os.ReadFile("/home/tazpod/secrets/gemini-api-key"); err == nil {
-			apiKey = string(data)
-		}
+
+	// Verify all mandatory variables
+	missing := []string{}
+	if dbHost == "" {
+		missing = append(missing, "DB_HOST")
 	}
+	if dbPort == "" {
+		missing = append(missing, "DB_PORT")
+	}
+	if dbUser == "" {
+		missing = append(missing, "DB_USER")
+	}
+	if dbPass == "" {
+		missing = append(missing, "DB_PASS")
+	}
+	if dbName == "" {
+		missing = append(missing, "DB_NAME")
+	}
+	if apiKey == "" {
+		missing = append(missing, "GEMINI_API_KEY")
+	}
+
+	if len(missing) > 0 {
+		slog.Error("Missing mandatory environment variables", "variables", strings.Join(missing, ", "))
+		os.Exit(1)
+	}
+
+	// Clean API key
 	apiKey = strings.Trim(strings.TrimSpace(apiKey), "\"'")
 
 	// 2. Inizializzazione Layer
@@ -51,20 +74,20 @@ func main() {
 	controller := logic.New(database, embedClient)
 	mcpServer := mcp.NewServer(controller)
 
-	// 3. Selezione Trasporto (Default: Stdio per CLI nativa)
-	transport := getEnv("MCP_TRANSPORT", "stdio")
-	port := getEnv("PORT", "8080")
+	// 3. Optional Configuration
+	transport := os.Getenv("MCP_TRANSPORT")
+	if transport == "" {
+		transport = "stdio"
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
 	if transport == "http" {
 		mcpServer.ServeHTTP(port)
 	} else {
 		mcpServer.ServeStdio()
 	}
-}
-
-func getEnv(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return fallback
 }
